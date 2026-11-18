@@ -1,121 +1,117 @@
-# Professional Express.js & TypeScript API Boilerplate
+# Express TypeScript Boilerplate with JWT Authentication
 
-A production-ready, highly maintainable RESTful API boilerplate built with Express.js, TypeScript, TypeORM, Joi, and Winston logging. Designed with a layered architecture (Controllers, Services, Repositories, DTOs, and Middleware) to ensure scalability, security, and developer productivity.
-
----
-
-##  Features
-
-- **TypeScript Architecture**: Strict type safety, clean code structure, and modern ES features.
-- **Layered Architecture**: Clear separation of concerns into Routes, Middleware, Controllers, Services, and Data Access (TypeORM).
-- **TypeORM Integration**: Database abstraction supporting PostgreSQL/MySQL/SQLite with migration and seeding support.
-- **Request Validation**: Schema-based validation using Joi for Request Body, Query Parameters, and URL Parameters.
-- **Centralized Error Handling**: Custom error hierarchy (`AppError`, `ValidationError`, `NotFoundError`, etc.) with operational vs. system error differentiation.
-- **Structured Logging**: Multi-transport Winston logging system capturing formatted console output, `logs/combined.log`, and `logs/error.log`.
-- **Health Checks**: Dedicated endpoint monitoring application status and active database connectivity.
-- **Graceful Shutdown**: Intercepts `SIGINT`/`SIGTERM` to safely terminate database connections and HTTP server listeners.
+A modular, production-ready REST API built with Express, TypeScript, TypeORM, Joi, Winston, and bcrypt. This project features structured error handling, request validation, security middleware, and stateless JWT-based authentication to protect user management endpoints.
 
 ---
 
-## Setup & Installation
+## Authentication Flow
 
-### Prerequisites
-
-- **Node.js**: `v18.x` or higher
-- **npm**: `v9.x` or higher
-- **Database**: PostgreSQL / MySQL / SQLite (configured via environment variables)
-
-### Installation Steps
-
-1. **Install dependencies:**
-   npm install
-
-2. **Configure Environment Variables:**
-   Copy the `.env.example` file to `.env`:
-   cp .env.example .env
-
-3. **Run Database Migrations & Seeds:**
-   npm run migration:run
-   npm run seed
-
-4. **Start Development Server:**
-   npm run dev
-   The server will start at `http://localhost:3000`.
+1. **Registration (`POST /api/users`):** A new user submits their details. Input is validated via Joi, their password is hashed using `bcrypt`, and the account is saved to the database.
+2. **Login (`POST /api/auth/login`):** The user provides their email and password. The server verifies the credentials against the stored hash and generates a signed JSON Web Token (JWT) containing the user's ID and email.
+3. **Accessing Protected Routes:** The client includes the JWT in the `Authorization` header (`Bearer <token>`) on subsequent requests.
+4. **Verification (`authMiddleware`):** Before reaching protected controllers, the middleware extracts the token, verifies its signature and expiration against `JWT_SECRET`, attaches the decoded user payload to `req.user`, and passes control forward—or rejects invalid/missing tokens with `401 Unauthorized`.
 
 ---
 
-## Environment Variables Documentation
+## How to Get a Token
 
-| Variable | Description | Default | Required |
-| :--- | :--- | :--- | :--- |
-| `PORT` | HTTP server port number | `3000` | No |
-| `NODE_ENV` | Application environment (`development` \| `production` \| `test`) | `development` | Yes |
-| `DB_HOST` | Database host address | `localhost` | Yes |
-| `DB_PORT` | Database connection port | `5432` | Yes |
-| `DB_USERNAME` | Database user name | `postgres` | Yes |
-| `DB_PASSWORD` | Database user password | `postgres` | Yes |
-| `DB_DATABASE` | Database name | `boilerplate_db` | Yes |
-| `LOG_LEVEL` | Logging level (`debug` \| `info` \| `warn` \| `error`) | `debug` | No |
+Send a `POST` request to the login endpoint with valid user credentials:
 
----
+**Endpoint:** `POST http://localhost:3000/api/auth/login`  
+**Headers:** `Content-Type: application/json`
 
-## API Endpoints Documentation
+**Request Body:**
+```json
+{
+  "email": "test@example.com",
+  "password": "Password123"
+}
+```
 
-### Health Check
-
-| Method | Endpoint | Description | Query / Body Params | Response Code |
-| :--- | :--- | :--- | :--- | :--- |
-| `GET` | `/health` | Application status & DB connection check | None | `200 OK` / `503 Service Unavailable` |
-| `GET` | `/health/crash-test` | Triggers a 500 error for testing `error.log` | None | `500 Internal Server Error` |
-
-### User Management (`/api/users`)
-
-| Method | Endpoint | Description | Request Body / Query Params | Response Code |
-| :--- | :--- | :--- | :--- | :--- |
-| `GET` | `/api/users` | List paginated users | `page` (default: 1)<br>`limit` (default: 10)<br>`sort` (createdAt\|name\|email)<br>`order` (ASC\|DESC) | `200 OK` |
-| `GET` | `/api/users/:id` | Get user by ID | Path param: `:id` (positive integer) | `200 OK` / `404 Not Found` |
-| `POST` | `/api/users` | Create a new user | `{ name, email, password, age? }` | `201 Created` / `400 Bad Request` / `409 Conflict` |
-| `PUT` | `/api/users/:id` | Update existing user | Path param: `:id`<br>Body: `{ name?, email?, age?, isActive? }` | `200 OK` / `400 Bad Request` / `404 Not Found` |
-| `DELETE` | `/api/users/:id` | Delete user by ID | Path param: `:id` (positive integer) | `200 OK` / `404 Not Found` |
+**Response (`200 OK`):**
+```json
+{
+  "success": true,
+  "data": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+    "user": {
+      "id": 1,
+      "name": "Test User",
+      "email": "test@example.com"
+    }
+  }
+}
+```
 
 ---
 
-## Database Migrations & Seeders
+## How to Use the Token
 
-### Running Migrations
+Include the token returned from `/api/auth/login` in the `Authorization` header using the `Bearer` scheme for any protected request:
 
-- **Run all pending migrations:**
-  npm run migration:run
-
-- **Revert the last executed migration:**
-  npm run migration:revert
-
-- **Generate a new migration file:**
-  npm run migration:generate -- src/database/migrations/CreateUsersTable
-
-### Running Seeders
-
-- **Execute database seeding:**
-  npm run seed
+```http
+Authorization: Bearer YOUR_TOKEN_HERE
+```
 
 ---
 
-## Reflection & Architecture Summary
+## API Endpoints
 
-### 1. Architectural Decisions & Layered Structure
-The application adopts a **Layered (N-Tier) Architecture** with strict boundaries:
-- **Routes & Middleware Layer**: Captures HTTP requests, executes authentication/validation middleware, and delegates execution to controllers.
-- **Controller Layer**: Handles HTTP request parsing, response formatting, and status code assignment without directly containing business logic.
-- **Service Layer**: Houses core domain logic, transaction boundaries, and reusable business operations.
-- **Repository/ORM Layer**: Manages database queries via TypeORM data mappers, ensuring data storage abstractions remain decoupled from business rules.
+### Public Endpoints (No Token Required)
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `GET` | `/health` | Check server and database connection status |
+| `POST` | `/api/users` | Register/create a new user account |
+| `POST` | `/api/auth/login` | Authenticate user and receive a JWT token |
 
-### 2. Error Handling & Resilience Strategy
-The application distinguishes explicitly between **Operational Errors** and **System / Programmer Errors**:
-- **Operational Errors** (e.g., `400 Validation Error`, `404 Not Found`, `409 Conflict`): Caught by Joi or thrown as instances of `AppError`. They log as `warn`/`info` level events and return formatted JSON error responses without disrupting server execution.
-- **System Errors** (e.g., Database drops, syntax errors, uncaught exceptions): Logged directly via `logger.error()` with full stack traces, capturing diagnostic data in `logs/error.log`.
+### Protected Endpoints (Bearer Token Required)
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `GET` | `/api/auth/me` | Retrieve the currently authenticated user's profile |
+| `GET` | `/api/users` | Retrieve paginated list of all users |
+| `GET` | `/api/users/:id` | Retrieve a single user by ID |
+| `PUT` | `/api/users/:id` | Update an existing user's details |
+| `DELETE` | `/api/users/:id` | Delete a user account |
 
-### 3. Logging Strategy & Monitoring
-Winston is configured with dual transports:
-- `logs/combined.log`: Captures all log outputs (`info`, `warn`, `error`) for complete auditing.
-- `logs/error.log`: Specifically filters for `level: 'error'` logs, enabling rapid debugging of system crashes and unhandled exceptions.
-- `Console`: Formatted with colorized, human-readable strings during development mode for real-time diagnostics.
+---
+
+## Reflection Questions
+
+### 1. What is the difference between authentication and authorization? Give a real-world example of each.
+Authentication is verifying *who* someone is, while authorization is checking *what* they are allowed to do once their identity is confirmed. In real life, showing your ID at the front desk of an office building to get a visitor badge is **authentication**. Using that badge at an elevator or door reader—where it lets you into the lobby and conference rooms, but blocks you from entering the server room—is **authorization**.
+
+### 2. Why is JWT considered "stateless" and how does that benefit scalability?
+A JWT is stateless because the server doesn't have to store active session records in memory or query a session table in the database on every request. Everything needed to identify the user is already inside the signed token itself. For scalability, this means you can run multiple backend server instances behind a load balancer without worrying about "sticky sessions" or syncing session storage across servers—any server with the same `JWT_SECRET` can immediately verify the token.
+
+### 3. What are the three parts of a JWT token and what does each part do?
+A JWT consists of three Base64Url-encoded strings separated by dots (`header.payload.signature`):
+* **Header:** Identifies the token type (`JWT`) and the signing algorithm used (such as `HS256`).
+* **Payload:** Contains the claims or data about the user—like `userId`, `email`, issued-at time (`iat`), and expiration (`exp`).
+* **Signature:** A cryptographic hash generated using the encoded header, encoded payload, and the server's secret key. It ensures the token hasn't been tampered with in transit.
+
+### 4. Why should you never put sensitive data (like passwords) in the JWT payload?
+The JWT payload is only Base64Url-encoded, **not encrypted**. Anyone who gets their hands on the token can decode the payload in seconds using any online decoder or simple JavaScript function. Putting passwords, credit card numbers, or private personal info inside the payload exposes that data in plain text.
+
+### 5. How does bcrypt protect user passwords? What is the purpose of the "salt" and "rounds"?
+`bcrypt` turns plain-text passwords into irreversible cryptographic hashes so actual passwords are never stored in the database. 
+* **Salt:** A random string added to each password before hashing. This guarantees that even if two users pick the exact same password (`Password123`), their resulting hashes look completely different, defeating precomputed rainbow table attacks.
+* **Rounds (Cost Factor):** Controls how computationally expensive and slow the hashing process is. Increasing the rounds makes brute-force guessing drastically slower for attackers while remaining fast enough for a single normal login.
+
+### 6. What happens if someone steals a JWT token? How can you mitigate this risk?
+Because JWTs are stateless, anyone holding a valid, unexpired token can impersonate that user until it expires. To reduce this risk, you can keep access token lifespans short (e.g., 15 minutes to 1 hour), store tokens safely on the client (such as `HttpOnly` cookies rather than `localStorage` to protect against XSS), always transmit over HTTPS, and maintain a token blacklist/revocation list in Redis for forced logouts or compromised accounts.
+
+### 7. Why is it important to use HTTPS when transmitting JWT tokens?
+Without HTTPS, HTTP traffic travels across the network in plain text. Anyone on the same public Wi-Fi network or intercepting traffic along the route (a Man-in-the-Middle attack) can read the `Authorization: Bearer <token>` header directly and reuse that token to hijack the user's session. HTTPS encrypts the entire request and response pipeline.
+
+### 8. What is the difference between a short-lived access token and a long-lived refresh token? When would you use each?
+An **access token** has a short lifespan (e.g., 15 minutes) and is sent with every API request to access protected endpoints. A **refresh token** lasts much longer (e.g., 7 to 30 days) and is only used to request a new access token once the current one expires. You use the access token for normal day-to-day API calls to minimize damage if it gets intercepted, and you use the refresh token quietly in the background so users don't get forced to type their password every 15 minutes.
+
+### 9. How does the auth middleware know which user is making the request?
+When `authMiddleware` intercepts an incoming request, it pulls the token from the `Authorization` header and passes it to `jwt.verify()`. Once the signature is confirmed valid, `jwt.verify()` decodes the payload (which contains the `userId` and `email` embedded during login) and attaches it to the Express `req` object (`req.user`), allowing downstream controllers to know exactly who made the call.
+
+### 10. If you had to implement role-based authorization (e.g., admin vs. regular user), how would you modify your current setup?
+I would make four updates:
+1. **User Entity & DTO:** Add a `role` column (e.g., `'user' | 'admin'`, defaulting to `'user'`) to the `User` entity and migration.
+2. **JWT Payload:** Include `role: user.role` when signing the token inside `AuthService.login()`.
+3. **Role Middleware:** Create an `authorizeRole(...allowedRoles)` middleware that runs right after `authMiddleware` and checks if `req.user.role` is in the allowed list, returning `403 Forbidden` if not.
+4. **Routes:** Chain `authorizeRole('admin')` onto restricted endpoints like `DELETE /api/users/:id`.
