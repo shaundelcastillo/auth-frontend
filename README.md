@@ -1,117 +1,179 @@
-# Express TypeScript Boilerplate with JWT Authentication
+# Authentication API with Email Verification & Password Reset
 
-A modular, production-ready REST API built with Express, TypeScript, TypeORM, Joi, Winston, and bcrypt. This project features structured error handling, request validation, security middleware, and stateless JWT-based authentication to protect user management endpoints.
+This backend service handles user registration, email verification, JWT-based login, and password resets. Building on the base boilerplate and MySQL setup, it adds real account verification through Nodemailer and time-bound, single-use tokens so users actually own the email addresses they register with and can recover access safely if they forget their password.
+
+## Features
+
+- **Account Registration with Verification:** Creates a new user with `isVerified` set to `false` by default, generates a verification token, and emails a verification link.
+- **Login Guardrails:** Blocks sign-in attempts if the account hasn't verified its email yet, if the account is inactive, or if the credentials don't match.
+- **Email Verification & Resend:** Validates the verification token, marks the account as verified, clears the token, and lets users request a fresh verification email when needed.
+- **Forgot & Reset Password:** Sends a password reset link when requested while returning a generic success response to avoid leaking whether an account exists, then updates the password hash and invalidates the reset token once used.
+- **JWT Protected Routes:** Issues signed tokens on login and protects endpoints like `/api/auth/me`.
 
 ---
 
-## Authentication Flow
+## Authentication Flows
 
-1. **Registration (`POST /api/users`):** A new user submits their details. Input is validated via Joi, their password is hashed using `bcrypt`, and the account is saved to the database.
-2. **Login (`POST /api/auth/login`):** The user provides their email and password. The server verifies the credentials against the stored hash and generates a signed JSON Web Token (JWT) containing the user's ID and email.
-3. **Accessing Protected Routes:** The client includes the JWT in the `Authorization` header (`Bearer <token>`) on subsequent requests.
-4. **Verification (`authMiddleware`):** Before reaching protected controllers, the middleware extracts the token, verifies its signature and expiration against `JWT_SECRET`, attaches the decoded user payload to `req.user`, and passes control forward—or rejects invalid/missing tokens with `401 Unauthorized`.
+### 1. Registration & Email Verification Flow
+1. A client sends `POST /api/auth/register` with `name`, `email`, `password`, and optional `age`.
+2. The service checks for duplicate emails (`409 Conflict` if already taken), hashes the password with `bcrypt`, and generates a random verification token along with an expiration timestamp.
+3. The user record is saved with `isVerified = false`, and `EmailService` sends a verification email containing `http://localhost:4200/verify-email?token=<token>`.
+4. Until the user verifies their email, `POST /api/auth/login` rejects the login with `401 Unauthorized`.
+5. When the client calls `GET /api/auth/verify-email?token=<token>`, the server checks that the token is valid and unexpired, sets `isVerified = true`, clears the verification token and expiry fields, and returns a success message.
+6. If the user never got or lost the email, `POST /api/auth/resend-verification` generates a fresh token and sends another email.
+
+### 2. Login & Protected Access Flow
+1. Once verified, the user calls `POST /api/auth/login` with `email` and `password`.
+2. The server verifies the account is verified and active, checks the password against the stored `bcrypt` hash, and signs a JWT (`JWT_SECRET`, `JWT_EXPIRES_IN`).
+3. The client includes `Authorization: Bearer <token>` on protected requests such as `GET /api/auth/me`.
+
+### 3. Forgot & Reset Password Flow
+1. A user calls `POST /api/auth/forgot-password` with their `email`.
+2. If the email exists, the server generates a short-lived reset token and expiry, saves it, and sends a reset link (`http://localhost:4200/reset-password?token=<token>`). Either way, the API returns a standard success response.
+3. The user submits `POST /api/auth/reset-password` with `token` and `newPassword`.
+4. If the token is valid and not expired, the server hashes `newPassword`, updates the user's password, clears the reset token and expiry, and confirms the reset.
 
 ---
 
-## How to Get a Token
+## Setup & Testing with Ethereal Email
 
-Send a `POST` request to the login endpoint with valid user credentials:
+### Environment Variables (`.env`)
+Make sure your `.env` includes your database settings, a strong `JWT_SECRET` (at least 32 characters), and your SMTP details:
 
-**Endpoint:** `POST http://localhost:3000/api/auth/login`  
-**Headers:** `Content-Type: application/json`
+```env
+NODE_ENV=development
+PORT=3002
+DB_HOST=localhost
+DB_PORT=3306
+DB_USERNAME=midterm_shaun
+DB_PASSWORD=admin123
+DB_DATABASE=boilerplate_db
+FRONTEND_URL=http://localhost:4200
+JWT_SECRET=your-32-character-or-longer-secret-key
+JWT_EXPIRES_IN=24h
+SMTP_HOST=smtp.ethereal.email
+SMTP_PORT=587
+SMTP_USER=your_ethereal_user
+SMTP_PASS=your_ethereal_pass
+EMAIL_FROM=noreply@yourapp.com
+```
 
-**Request Body:**
-```json
+### Viewing Sent Emails in Ethereal
+1. Start the API server (`npm run dev`) and confirm both the database and email service initialize cleanly.
+2. Trigger `POST /api/auth/register` or `POST /api/auth/forgot-password` in EchoAPI or Postman.
+3. Check the terminal logs where `npm run dev` is running for the Ethereal preview URL (`https://ethereal.email/message/...`).
+4. Open that URL in your browser to inspect the rendered HTML/plain-text email and copy the `token` value from the link (joining any wrapped characters at the end without spaces or line breaks).
+
+---
+
+## API Endpoints & Examples
+
+> Note: Replace `:3002` with whatever `PORT` you configured in `.env`.
+
+### `POST /api/auth/register`
+Registers a new account and sends a verification email.
+
+
 {
-  "email": "test@example.com",
+  "name": "John Doe",
+  "email": "john.doe@example.com",
+  "password": "Password123",
+  "age": 21
+}
+```
+
+### `GET /api/auth/verify-email?token=<token>`
+Verifies a user's email address using the token from the verification email.
+
+- **Example:** `GET http://localhost:3002/api/auth/verify-email?token=31ef625fe78f1f7d260f1b1c19ffe5e21bbb60330b76fb49184e4262be62c7b7`
+- **Success (`200`):** `{"success": true, "message": "Email verified successfully. You can now log in."}`
+
+### `POST /api/auth/resend-verification`
+Sends a new verification email if the account is still unverified.
+
+
+{
+  "email": "john.doe@example.com"
+}
+```
+
+### `POST /api/auth/login`
+Authenticates a verified user and returns a JWT token.
+
+
+{
+  "email": "john.doe@example.com",
   "password": "Password123"
 }
 ```
 
-**Response (`200 OK`):**
-```json
+### `GET /api/auth/me`
+Returns the current authenticated user's profile.
+
+- **Header:** `Authorization: Bearer <jwt_token>`
+
+### `POST /api/auth/forgot-password`
+Initiates the password reset email flow.
+
+
 {
-  "success": true,
-  "data": {
-    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-    "user": {
-      "id": 1,
-      "name": "Test User",
-      "email": "test@example.com"
-    }
-  }
+  "email": "john.doe@example.com"
+}
+```
+
+### `POST /api/auth/reset-password`
+Resets the user's password using a valid reset token.
+
+
+{
+  "token": "2b1350baa9a51636958d03489317cd8889ceb0444ba642e9e749b8e9cd51f8e7",
+  "newPassword": "NewPassword456"
 }
 ```
 
 ---
 
-## How to Use the Token
+## Security Features Implemented
 
-Include the token returned from `/api/auth/login` in the `Authorization` header using the `Bearer` scheme for any protected request:
-
-```http
-Authorization: Bearer YOUR_TOKEN_HERE
-```
-
----
-
-## API Endpoints
-
-### Public Endpoints (No Token Required)
-| Method | Endpoint | Description |
-| :--- | :--- | :--- |
-| `GET` | `/health` | Check server and database connection status |
-| `POST` | `/api/users` | Register/create a new user account |
-| `POST` | `/api/auth/login` | Authenticate user and receive a JWT token |
-
-### Protected Endpoints (Bearer Token Required)
-| Method | Endpoint | Description |
-| :--- | :--- | :--- |
-| `GET` | `/api/auth/me` | Retrieve the currently authenticated user's profile |
-| `GET` | `/api/users` | Retrieve paginated list of all users |
-| `GET` | `/api/users/:id` | Retrieve a single user by ID |
-| `PUT` | `/api/users/:id` | Update an existing user's details |
-| `DELETE` | `/api/users/:id` | Delete a user account |
+- **Cryptographically Secure Tokens:** Generated with `crypto.randomBytes(32)` rather than predictable random or timestamp functions.
+- **One-Time Use & Expiration:** Verification and reset tokens expire after a set window and are cleared once consumed so replaying an old link fails.
+- **Password Hashing:** Passwords are never stored in plain text and are hashed with `bcrypt`.
+- **Anti-Enumeration Responses:** Forgot-password responses stay consistent regardless of whether an email exists in the database.
+- **Environment Validation:** Startup configuration is validated with `Joi` so missing or weak settings fail fast.
 
 ---
 
 ## Reflection Questions
 
-### 1. What is the difference between authentication and authorization? Give a real-world example of each.
-Authentication is verifying *who* someone is, while authorization is checking *what* they are allowed to do once their identity is confirmed. In real life, showing your ID at the front desk of an office building to get a visitor badge is **authentication**. Using that badge at an elevator or door reader—where it lets you into the lobby and conference rooms, but blocks you from entering the server room—is **authorization**.
+### 1. Why is email verification important for security? What problems does it prevent?
+Email verification confirms that the person signing up actually controls the inbox they entered. Without it, attackers can register accounts using someone else's email address—either to spam that person's inbox, tie unwanted accounts to their identity, or set up confusion around password resets later. It also cuts down on bot sign-ups and fake accounts made with random or mistyped addresses, giving you a cleaner user base and a reliable channel for critical account notices.
 
-### 2. Why is JWT considered "stateless" and how does that benefit scalability?
-A JWT is stateless because the server doesn't have to store active session records in memory or query a session table in the database on every request. Everything needed to identify the user is already inside the signed token itself. For scalability, this means you can run multiple backend server instances behind a load balancer without worrying about "sticky sessions" or syncing session storage across servers—any server with the same `JWT_SECRET` can immediately verify the token.
+### 2. Explain the "always return success" pattern in forgot password. Why is it a security best practice?
+The "always return success" pattern means `POST /api/auth/forgot-password` responds with a generic success message whether the email address is in the database or not. If the endpoint returned `404 Not Found` for unknown emails and `200 OK` for existing ones, anyone could test a list of emails and find out which ones have accounts on your platform. Returning the same message either way hides that information while still sending the reset email behind the scenes when a matching user exists.
 
-### 3. What are the three parts of a JWT token and what does each part do?
-A JWT consists of three Base64Url-encoded strings separated by dots (`header.payload.signature`):
-* **Header:** Identifies the token type (`JWT`) and the signing algorithm used (such as `HS256`).
-* **Payload:** Contains the claims or data about the user—like `userId`, `email`, issued-at time (`iat`), and expiration (`exp`).
-* **Signature:** A cryptographic hash generated using the encoded header, encoded payload, and the server's secret key. It ensures the token hasn't been tampered with in transit.
+### 3. What's the difference between a verification token and a reset token? Why do they have different expiration times?
+A verification token proves ownership of an email address when confirming a new account, while a reset token authorizes changing the password on an existing account. Reset tokens carry higher immediate risk because anyone with a valid reset token—if intercepted—can take over the account by setting a new password, so they are given a short expiration window (such as 1 hour). Verification tokens are lower risk for account takeover on their own, so giving users a longer window (such as 24 hours) is practical when they might not check their email right away.
 
-### 4. Why should you never put sensitive data (like passwords) in the JWT payload?
-The JWT payload is only Base64Url-encoded, **not encrypted**. Anyone who gets their hands on the token can decode the payload in seconds using any online decoder or simple JavaScript function. Putting passwords, credit card numbers, or private personal info inside the payload exposes that data in plain text.
+### 4. Why do we use `crypto.randomBytes(32)` instead of `Math.random()` or `Date.now()` for token generation?
+`Math.random()` is not cryptographically secure—its output can be predicted if an attacker observes enough values—and `Date.now()` is based on the current time, which is easy to guess within a narrow window. `crypto.randomBytes(32)` pulls from the operating system's cryptographic random number generator to produce 256 bits of high-entropy data, making tokens practically impossible to guess or brute-force.
 
-### 5. How does bcrypt protect user passwords? What is the purpose of the "salt" and "rounds"?
-`bcrypt` turns plain-text passwords into irreversible cryptographic hashes so actual passwords are never stored in the database. 
-* **Salt:** A random string added to each password before hashing. This guarantees that even if two users pick the exact same password (`Password123`), their resulting hashes look completely different, defeating precomputed rainbow table attacks.
-* **Rounds (Cost Factor):** Controls how computationally expensive and slow the hashing process is. Increasing the rounds makes brute-force guessing drastically slower for attackers while remaining fast enough for a single normal login.
+### 5. What happens if a user never verifies their email? How does your system handle this?
+In this system, an unverified user has `isVerified` set to `false`, so `AuthService.login()` blocks them from logging in and returns a `401 Unauthorized` response asking them to verify their email first. If they missed the original email or their token expired, they can call `/api/auth/resend-verification` to get a new link. In a full production app, you might also periodically clean up stale unverified accounts or remind users before sending non-essential notifications.
 
-### 6. What happens if someone steals a JWT token? How can you mitigate this risk?
-Because JWTs are stateless, anyone holding a valid, unexpired token can impersonate that user until it expires. To reduce this risk, you can keep access token lifespans short (e.g., 15 minutes to 1 hour), store tokens safely on the client (such as `HttpOnly` cookies rather than `localStorage` to protect against XSS), always transmit over HTTPS, and maintain a token blacklist/revocation list in Redis for forced logouts or compromised accounts.
+### 6. Explain why tokens are cleared after use. What security risk does this prevent?
+Clearing the token (and its expiration field) in the database as soon as it is used makes it strictly single-use. If a token stayed stored and valid after being redeemed, anyone who found that link later in browser history, logs, or a forwarded email could replay it—for instance, resetting a user's password a second time without their knowledge.
 
-### 7. Why is it important to use HTTPS when transmitting JWT tokens?
-Without HTTPS, HTTP traffic travels across the network in plain text. Anyone on the same public Wi-Fi network or intercepting traffic along the route (a Man-in-the-Middle attack) can read the `Authorization: Bearer <token>` header directly and reuse that token to hijack the user's session. HTTPS encrypts the entire request and response pipeline.
+### 7. What is email enumeration and how does your implementation prevent it?
+Email enumeration is when an attacker probes endpoints like login, registration, or forgot-password to figure out whether a specific email is registered in the system. Our forgot-password flow prevents this by returning a uniform success response regardless of whether the email exists in `users`, and login errors use clear, non-revealing messaging where appropriate rather than exposing internal lookup details.
 
-### 8. What is the difference between a short-lived access token and a long-lived refresh token? When would you use each?
-An **access token** has a short lifespan (e.g., 15 minutes) and is sent with every API request to access protected endpoints. A **refresh token** lasts much longer (e.g., 7 to 30 days) and is only used to request a new access token once the current one expires. You use the access token for normal day-to-day API calls to minimize damage if it gets intercepted, and you use the refresh token quietly in the background so users don't get forced to type their password every 15 minutes.
+### 8. If you had to implement two-factor authentication (2FA) on top of this system, how would you approach it?
+I would add 2FA right after primary credential checks (`email` + `password`) during login, before issuing the final session/access JWT:
+- Add fields on `User` such as `twoFactorEnabled` (`boolean`), `twoFactorSecret` (stored encrypted at rest), and hashed backup recovery codes.
+- Support TOTP authenticator apps (like Google Authenticator or Authy) by generating a secret/QR URI during setup and verifying a 6-digit time-based code.
+- During `POST /api/auth/login`, if `twoFactorEnabled` is true, return a short-lived pending/challenge token (or require a `twoFactorCode` step) instead of full access, and only issue the full JWT once the second factor passes.
 
-### 9. How does the auth middleware know which user is making the request?
-When `authMiddleware` intercepts an incoming request, it pulls the token from the `Authorization` header and passes it to `jwt.verify()`. Once the signature is confirmed valid, `jwt.verify()` decodes the payload (which contains the `userId` and `email` embedded during login) and attaches it to the Express `req` object (`req.user`), allowing downstream controllers to know exactly who made the call.
+### 9. What are the trade-offs between using Ethereal (test service) vs. SendGrid (production service)?
+Ethereal is great for local development and testing because it's free, requires zero risk of emailing real people, and gives you an instant web preview to inspect links and templates—but messages aren't delivered to real external inboxes and aren't meant for production traffic. SendGrid (or another transactional email provider) is built for real-world delivery with dedicated infrastructure, deliverability monitoring, analytics, and higher sending capacity, though it requires account setup, domain authentication, API key management, and paid tiers as volume grows.
 
-### 10. If you had to implement role-based authorization (e.g., admin vs. regular user), how would you modify your current setup?
-I would make four updates:
-1. **User Entity & DTO:** Add a `role` column (e.g., `'user' | 'admin'`, defaulting to `'user'`) to the `User` entity and migration.
-2. **JWT Payload:** Include `role: user.role` when signing the token inside `AuthService.login()`.
-3. **Role Middleware:** Create an `authorizeRole(...allowedRoles)` middleware that runs right after `authMiddleware` and checks if `req.user.role` is in the allowed list, returning `403 Forbidden` if not.
-4. **Routes:** Chain `authorizeRole('admin')` onto restricted endpoints like `DELETE /api/users/:id`.
+### 10. How would you handle a situation where a user's email provider marks your emails as spam?
+First, I'd check email authentication records on the sending domain—**SPF**, **DKIM**, and **DMARC**—since missing or misconfigured records are a top reason legitimate mail lands in spam. Next, I'd review the email content and sending behavior (clear "From" address matching the domain, helpful plain-text fallback alongside HTML, no spammy wording or link shorteners, and low bounce/complaint rates). Finally, I'd guide users in the UI/email to check their Spam/Junk folder, add the sender address to their contacts, and use the resend option if needed.

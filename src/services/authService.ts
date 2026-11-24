@@ -6,99 +6,92 @@ import { UnauthorizedError } from '../utils/errors';
 import { config } from '../config/env';
 import { createLogger } from '../utils/logger';
 
-
 const logger = createLogger('AuthService');
 const userRepository = AppDataSource.getRepository(User);
 
-
 interface LoginInput {
-   email: string;
-   password: string;
+    email: string;
+    password: string;
 }
-
 
 interface TokenPayload {
-   userId: number;
-   email: string;
+    userId: number;
+    email: string;
 }
-
 
 interface AuthResponse {
-   token: string;
-   user: {
-       id: number;
-       email: string;
-       name: string;
-   };
+    token: string;
+    user: {
+        id: number;
+        email: string;
+        name: string;
+    };
 }
 
-
 export class AuthService {
-   /**
-    * Login user and generate JWT token
-    */
-   static async login(input: LoginInput): Promise<AuthResponse> {
-       const { email, password } = input;
+    /**
+     * Login user and generate JWT token
+     */
+    static async login(input: LoginInput): Promise<AuthResponse> {
+        const { email, password } = input;
 
+        // 1. Find user by email (include password and isVerified for checks)
+        const user = await userRepository.findOne({
+            where: { email },
+            select: ['id', 'email', 'name', 'password', 'isActive', 'isVerified'],
+        });
 
-       // 1. Find user by email (include password for comparison)
-       const user = await userRepository.findOne({
-           where: { email },
-           select: ['id', 'email', 'name', 'password', 'isActive'],
-       });
+        if (!user) {
+            logger.warn('Login attempt with non-existent email', { email });
+            throw new UnauthorizedError('Invalid email or password');
+        }
 
+        // Check if email is verified
+        if (!user.isVerified) {
+            logger.warn('Login attempt for unverified account', { email });
+            throw new UnauthorizedError(
+                'Please verify your email address before logging in. Check your inbox for the verification link.'
+            );
+        }
 
-       if (!user) {
-           logger.warn('Login attempt with non-existent email', { email });
-           throw new UnauthorizedError('Invalid email or password');
-       }
+        // 2. Check if user is active
+        if (!user.isActive) {
+            logger.warn('Login attempt for inactive account', { email });
+            throw new UnauthorizedError('Account is deactivated');
+        }
 
+        // 3. Compare passwords with bcrypt
+        const isPasswordValid = await bcrypt.compare(password, user.password);
 
-       // 2. Check if user is active
-       if (!user.isActive) {
-           logger.warn('Login attempt for inactive account', { email });
-           throw new UnauthorizedError('Account is deactivated');
-       }
+        if (!isPasswordValid) {
+            logger.warn('Login attempt with wrong password', { email });
+            throw new UnauthorizedError('Invalid email or password');
+        }
 
+        // 4. Generate JWT token
+        const tokenPayload: TokenPayload = {
+            userId: user.id,
+            email: user.email,
+        };
 
-       // 3. Compare passwords with bcrypt
-       const isPasswordValid = await bcrypt.compare(password, user.password);
+        const token = jwt.sign(tokenPayload, config.jwt.secret, {
+            expiresIn: config.jwt.expiresIn,
+        });
 
+        logger.info('User logged in successfully', { userId: user.id, email });
 
-       if (!isPasswordValid) {
-           logger.warn('Login attempt with wrong password', { email });
-           throw new UnauthorizedError('Invalid email or password');
-       }
+        // 5. Return token and user data (without password)
+        return {
+            token,
+            user: {
+                id: user.id,
+                email: user.email,
+                name: user.name,
+            },
+        };
+    }
 
-
-       // 4. Generate JWT token
-       const tokenPayload: TokenPayload = {
-           userId: user.id,
-           email: user.email,
-       };
-
-
-       const token = jwt.sign(tokenPayload, config.jwt.secret, {
-           expiresIn: config.jwt.expiresIn,
-       });
-
-
-       logger.info('User logged in successfully', { userId: user.id, email });
-
-
-       // 5. Return token and user data (without password)
-       return {
-           token,
-           user: {
-               id: user.id,
-               email: user.email,
-               name: user.name,
-           },
-       };
-   }
-
-
-   /**
+    /**
      * Verify JWT token and return decoded payload
      */
     static async verifyToken(token: string): Promise<TokenPayload> {
@@ -116,30 +109,25 @@ export class AuthService {
         }
     }
 
+    /**
+     * Get user from token (useful for getting full user data)
+     */
+    static async getUserFromToken(token: string): Promise<User> {
+        const decoded = await this.verifyToken(token);
 
-   /**
-    * Get user from token (useful for getting full user data)
-    */
-   static async getUserFromToken(token: string): Promise<User> {
-       const decoded = await this.verifyToken(token);
+        const user = await userRepository.findOne({
+            where: { id: decoded.userId },
+            select: ['id', 'email', 'name', 'isActive', 'createdAt'],
+        });
 
+        if (!user) {
+            throw new UnauthorizedError('User not found');
+        }
 
-       const user = await userRepository.findOne({
-           where: { id: decoded.userId },
-           select: ['id', 'email', 'name', 'isActive', 'createdAt'],
-       });
+        if (!user.isActive) {
+            throw new UnauthorizedError('Account is deactivated');
+        }
 
-
-       if (!user) {
-           throw new UnauthorizedError('User not found');
-       }
-
-
-       if (!user.isActive) {
-           throw new UnauthorizedError('Account is deactivated');
-       }
-
-
-       return user;
-   }
+        return user;
+    }
 }
